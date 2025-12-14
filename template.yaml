@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Bedrock SD3.5 image generator -> S3 -> said presigned URL
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+
+Resources:
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireGeneratedImages
+            Status: Enabled
+            ExpirationInDays: 7
+
+  ImageGenApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+
+  ImageGenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          OUTPUT_BUCKET: !Ref OutputBucket
+          BEDROCK_REGION: us-west-2
+          MODEL_ID: stability.sd3-5-large-v1:0
+          KEY_PREFIX: sd35/
+      Events:
+        Generate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ImageGenApi
+            Path: /generate
+            Method: POST
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/stability.sd3-5-large-v1:0"
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource:
+                - !Sub "${OutputBucket.Arn}/*"
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${ImageGenApi}.execute-api.${AWS::Region}.amazonaws.com/prod/generate"
+  BucketName:
+    Value: !Ref OutputBucket
